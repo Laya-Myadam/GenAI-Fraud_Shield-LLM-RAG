@@ -2,6 +2,19 @@
 
 A dual-dataset fraud detection platform combining XGBoost, RAG (Retrieval-Augmented Generation), and LLM-powered explanations via Groq — with a Streamlit interface for real-time transaction analysis.
 
+## 🧩 Problem the App Solves
+
+Traditional fraud detection systems rely on rule-based logic or machine learning models that produce predictions without clear explanations. This makes it difficult for analysts to trust decisions, investigate edge cases, or understand why a transaction was flagged.
+
+This application addresses that gap by combining machine learning with LLM-based reasoning to:
+
+- Accurately detect fraudulent transactions using XGBoost models  
+- Provide clear, human-readable explanations for each prediction  
+- Leverage similar historical transactions to add contextual understanding  
+- Assist analysts with structured insights such as risk factors, pattern comparisons, and recommendations  
+
+The goal is to move from black-box predictions to explainable, decision-support systems for fraud analysis.
+
 ---
 
 ## 📸 Screenshots
@@ -29,6 +42,69 @@ A dual-dataset fraud detection platform combining XGBoost, RAG (Retrieval-Augmen
 | **RAG** | FAISS (transaction summaries) | FAISS (PCA summaries) |
 | **Key Metrics** | Precision / Recall / F1 / AUC + Recall@K | Precision / Recall / F1 / AUC |
 
+## 🤖 LLMs Used and Why
+
+This system uses Groq-hosted Llama 3.3-70B for generating fraud analysis and explanations.
+
+Reasons for selection:
+- Strong reasoning capability for structured analysis tasks  
+- Low-latency inference via Groq, enabling near real-time responses  
+- Ability to generate multi-step explanations (risk analysis, comparisons, recommendations)
+
+The LLM is used to:
+- Interpret ML model outputs  
+- Analyze transaction features in context  
+- Compare current transactions with retrieved historical cases  
+- Generate structured, analyst-friendly explanations  
+
+In addition, sentence-transformer models are used to generate embeddings for retrieval, and FAISS is used for efficient similarity search.
+
+## 🧠 Prompting, Evaluation, and Iteration
+
+### Prompting Strategy
+
+Prompts are carefully structured to produce consistent, explainable, and grounded outputs.
+
+Each prompt includes:
+- Transaction details (features and metadata)  
+- Retrieved similar historical cases (via FAISS)  
+- Explicit instructions for structured output  
+
+The LLM is guided to generate:
+1. Risk analysis  
+2. Pattern comparison with historical cases  
+3. Key risk indicators  
+4. Analyst recommendation  
+5. Executive summary  
+
+To reduce hallucinations, the model is instructed to rely only on provided context and avoid unsupported assumptions.
+
+---
+
+### Evaluation Approach
+
+The system is evaluated at two levels:
+
+**1. ML Model Evaluation**
+- Precision, Recall, F1 Score, AUC-ROC  
+- Recall@K for identifying high-risk transactions  
+
+**2. LLM Output Evaluation**
+- Consistency of explanations across similar inputs  
+- Alignment between ML predictions and LLM reasoning  
+- Manual inspection of edge cases and reasoning quality  
+
+---
+
+### Iteration
+
+The system was iteratively improved by:
+- Refining prompt structure for clearer reasoning outputs  
+- Adjusting retrieval top-K to improve context relevance  
+- Improving feature summaries used in embeddings  
+- Enhancing output structure for better readability and usability  
+
+These iterations improved both explanation quality and system reliability.
 ---
 
 ## 🚀 Quick Start
@@ -138,6 +214,24 @@ streamlit run app.py
 - **Recall@K** *(IEEE-CIS only)* — recall among the top-K highest-risk predictions
 
 ---
+## ⚖️ Tradeoffs and Limitations
+
+### Tradeoffs
+
+- Improved explainability vs increased latency due to LLM inference  
+- Flexible reasoning vs deterministic outputs from traditional ML models  
+- RAG improves grounding but adds system complexity and dependency on retrieval quality  
+
+---
+
+### Limitations
+
+- LLM outputs may still produce incorrect or incomplete reasoning in low-context scenarios  
+- Performance depends on the quality and relevance of retrieved historical transactions  
+- Real-time inference latency is higher compared to pure ML pipelines  
+- Explanations are not guaranteed to be fully faithful to model internals (post-hoc reasoning)
+
+Future improvements could include better retrieval strategies, caching, and domain-specific fine-tuning.
 
 ## 🛠️ Tech Stack
 

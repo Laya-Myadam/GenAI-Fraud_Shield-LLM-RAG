@@ -1,4 +1,4 @@
-# 🛡️ AI-Powered Fraud Detection System
+# 🛡️ GenAI Credit Card Risk \& Decision Intelligence Platform
 
 A dual-dataset fraud detection platform combining XGBoost, RAG (Retrieval-Augmented Generation), and LLM-powered explanations via Groq — with a Streamlit interface for real-time transaction analysis.
 

@@ -1,4 +1,4 @@
-# 🛡️ GenAI Credit Card Risk \& Decision Intelligence Platform
+# 🛡️ GenAI Credit Card Risk \& Decision Intelligence Platform  - “AI-driven financial risk decision intelligence platform combining ML, RAG, and LLMs to generate explainable insights and actionable recommendations for fraud analysis”
 
 A dual-dataset fraud detection platform combining XGBoost, RAG (Retrieval-Augmented Generation), and LLM-powered explanations via Groq — with a Streamlit interface for real-time transaction analysis.
 

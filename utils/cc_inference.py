@@ -9,6 +9,7 @@ import joblib
 import json
 import os
 import faiss
+from sentence_transformers import SentenceTransformer
 
 from utils.cc_data_utils import (
     preprocess_creditcard, build_cc_transaction_summary, compute_recall_at_k
@@ -46,7 +47,8 @@ class CCFraudEngine:
             vs_index_path = os.path.join(CC_VS_DIR, "fraud_index.faiss")
             if os.path.exists(vs_index_path):
                 self.faiss_index = faiss.read_index(vs_index_path)
-                self.embedder    = joblib.load(os.path.join(CC_VS_DIR, "embedder.pkl"))
+                from sentence_transformers import SentenceTransformer
+                self.embedder = SentenceTransformer("all-MiniLM-L6-v2")
                 with open(os.path.join(CC_VS_DIR, "metadata.json")) as f:
                     self.vs_metadata = json.load(f)
                 print("✅ CC vector store loaded")

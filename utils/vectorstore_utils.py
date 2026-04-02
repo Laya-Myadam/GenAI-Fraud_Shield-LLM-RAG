@@ -84,8 +84,6 @@ def build_vectorstore(
 
     # ── Save everything ────────────────────────────────────────
     faiss.write_index(index, os.path.join(VECTORSTORE_DIR, "fraud_index.faiss"))
-    joblib.dump(embedder, os.path.join(VECTORSTORE_DIR, "embedder.pkl"))
-
     # Save metadata (summaries + labels)
     metadata = [
         {
@@ -106,7 +104,8 @@ def build_vectorstore(
 def load_vectorstore():
     """Load FAISS index, embedder, and metadata."""
     index    = faiss.read_index(os.path.join(VECTORSTORE_DIR, "fraud_index.faiss"))
-    embedder = joblib.load(os.path.join(VECTORSTORE_DIR, "embedder.pkl"))
+    from sentence_transformers import SentenceTransformer
+    embedder = SentenceTransformer("all-MiniLM-L6-v2")
     with open(os.path.join(VECTORSTORE_DIR, "metadata.json")) as f:
         metadata = json.load(f)
     return index, embedder, metadata

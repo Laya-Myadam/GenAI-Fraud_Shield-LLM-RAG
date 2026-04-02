@@ -1,6 +1,4 @@
 .env
 .env.example
 data/
-vectorstore/
-*.pkl
 *.csv

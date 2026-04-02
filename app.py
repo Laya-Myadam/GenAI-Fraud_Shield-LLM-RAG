@@ -261,7 +261,7 @@ if page == "🔍 Analyze Transaction":
 
     if is_ieee:
         st.markdown("# 🏦 IEEE-CIS Transaction Analysis")
-        st.markdown("Analyze e-commerce transactions with card and identity features.")
+        st.markdown("Analyze payment card transactions with financial institution risk features.")
 
         engine, err = load_ieee_engine()
         if err:

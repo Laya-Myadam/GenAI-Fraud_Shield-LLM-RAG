@@ -2,3 +2,4 @@
 .env.example
 data/
 *.csv
+embedder.pkl

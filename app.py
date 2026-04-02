@@ -9,6 +9,8 @@ import pandas as pd
 import numpy as np
 import json
 import os
+import requests
+import datetime
 import plotly.graph_objects as go
 import plotly.express as px
 from dotenv import load_dotenv
@@ -61,6 +63,7 @@ st.markdown("""
     .dataset-badge-ieee { background:#1f6feb; color:white; padding:3px 10px; border-radius:12px; font-size:0.8rem; font-weight:600; }
     .dataset-badge-cc   { background:#a371f7; color:white; padding:3px 10px; border-radius:12px; font-size:0.8rem; font-weight:600; }
     .lora-badge { background:#a371f720; border:1px solid #a371f7; border-radius:8px; padding:6px 12px; font-size:0.82rem; display:inline-block; }
+    .signal-card { background:#161b22; border:1px solid #30363d; border-radius:10px; padding:14px 16px; margin:4px 0; }
     header[data-testid="stHeader"] { background: transparent; }
     .stTabs [data-baseweb="tab"] { color: #8b949e; font-weight: 500; }
     .stTabs [aria-selected="true"] { color: #58a6ff; border-bottom-color: #58a6ff; }
@@ -91,10 +94,181 @@ def load_cc_engine():
         return None, str(e)
 
 
+# ── External Signals ───────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def get_exchange_rate_risk(amount: float, country_code: int) -> dict:
+    HIGH_RISK_CURRENCIES = {"NGN", "VES", "IRR", "MMK", "SDG", "SYP", "ZWL"}
+    COUNTRY_TO_CURRENCY = {
+        87: "USD", 62: "EUR", 13: "GBP", 142: "JPY",
+        208: "CNY", 92: "INR", 32: "BRL", 45: "CAD",
+        50: "NGN", 117: "VES", 96: "IRR",
+    }
+    try:
+        currency = COUNTRY_TO_CURRENCY.get(country_code, "USD")
+        resp = requests.get("https://open.er-api.com/v6/latest/USD", timeout=5)
+        data = resp.json()
+        if data.get("result") == "success":
+            rate = data["rates"].get(currency, 1.0)
+            usd_amount = amount / rate if currency != "USD" else amount
+            is_high_risk = currency in HIGH_RISK_CURRENCIES
+            return {
+                "currency": currency, "exchange_rate": round(rate, 4),
+                "usd_equivalent": round(usd_amount, 2),
+                "high_risk_currency": is_high_risk,
+                "large_usd_amount": usd_amount > 5000,
+                "risk_score": 3 if is_high_risk else (2 if usd_amount > 5000 else 0),
+                "status": "live",
+            }
+    except Exception:
+        pass
+    return {
+        "currency": "USD", "exchange_rate": 1.0, "usd_equivalent": amount,
+        "high_risk_currency": False, "large_usd_amount": amount > 5000,
+        "risk_score": 2 if amount > 5000 else 0, "status": "unavailable",
+    }
+
+
+@st.cache_data(ttl=86400)
+def get_geolocation_risk(country_code: int) -> dict:
+    HIGH_RISK_COUNTRIES = {50, 96, 117, 140, 178, 204, 232}
+    MEDIUM_RISK_COUNTRIES = {32, 55, 76, 92, 103, 136, 159, 190}
+    SANCTIONED_COUNTRIES = {96, 117, 140}
+    try:
+        resp = requests.get("https://ipapi.co/json/", timeout=4)
+        ip_data = resp.json()
+        ip_org = ip_data.get("org", "")
+        ip_city = ip_data.get("city", "Unknown")
+        is_vpn = any(x in ip_org.lower() for x in ["vpn","proxy","hosting","datacenter","digitalocean","linode","aws","google cloud"])
+    except Exception:
+        ip_city = "Unknown"
+        is_vpn = False
+
+    is_high_risk  = country_code in HIGH_RISK_COUNTRIES
+    is_sanctioned = country_code in SANCTIONED_COUNTRIES
+    is_medium     = country_code in MEDIUM_RISK_COUNTRIES
+    risk_score = (4 if is_sanctioned else 3 if is_high_risk else 1 if is_medium else 0) + (2 if is_vpn else 0)
+    return {
+        "ip_city": ip_city, "is_high_risk_country": is_high_risk,
+        "is_sanctioned_country": is_sanctioned, "vpn_proxy_detected": is_vpn,
+        "risk_score": min(risk_score, 5),
+        "risk_tier": "HIGH" if risk_score >= 3 else "MEDIUM" if risk_score >= 1 else "LOW",
+    }
+
+
+def get_time_risk(transaction_dt: int) -> dict:
+    now  = datetime.datetime.utcnow()
+    hour = (transaction_dt % 86400) // 3600
+    is_odd     = hour < 6 or hour >= 23
+    is_weekend = now.weekday() >= 5
+    is_holiday = now.month in [11, 12]
+    is_monthend = now.day >= 28
+    is_rapid   = transaction_dt < 3600
+    flags, score = [], 0
+    if is_odd:     flags.append(f"Off-hours transaction ({hour}:00 UTC)"); score += 2
+    if is_weekend: flags.append("Weekend transaction"); score += 1
+    if is_holiday: flags.append("Holiday season (elevated fraud period)"); score += 1
+    if is_monthend:flags.append("Month-end (elevated fraud period)"); score += 1
+    if is_rapid:   flags.append("Very early in sequence (possible test transaction)"); score += 2
+    return {
+        "hour_utc": hour, "is_odd_hours": is_odd, "is_weekend": is_weekend,
+        "is_holiday_season": is_holiday, "is_rapid_sequence": is_rapid,
+        "risk_flags": flags, "risk_score": min(score, 5),
+        "risk_tier": "HIGH" if score >= 3 else "MEDIUM" if score >= 1 else "LOW",
+    }
+
+
+def get_fraud_pattern_indicators(amount, product_cd=None, p_email=None, r_email=None, card_type=None) -> dict:
+    HIGH_RISK_EMAILS = ["anonymous.com","protonmail.com","guerrillamail.com","tempmail.com"]
+    HIGH_RISK_PRODUCTS = ["H", "S"]
+    flags, score = [], 0
+    if any(abs(amount - r) < 0.01 for r in [100,200,500,1000,2000,5000]):
+        flags.append("Round-number amount (structuring indicator)"); score += 1
+    if amount < 1.0:
+        flags.append("Micro-transaction (card verification pattern)"); score += 2
+    if amount > 3000:
+        flags.append("High-value transaction (above typical threshold)"); score += 1
+    if p_email and any(h in p_email for h in HIGH_RISK_EMAILS):
+        flags.append(f"High-risk purchaser email domain ({p_email})"); score += 2
+    if p_email and r_email and p_email != r_email and ("anonymous" in p_email or "anonymous" in r_email):
+        flags.append("Anonymous email on transaction party (identity concealment)"); score += 2
+    if product_cd and product_cd in HIGH_RISK_PRODUCTS:
+        flags.append(f"High-risk product category ({product_cd})"); score += 1
+    if card_type and "charge card" in card_type.lower():
+        flags.append("Charge card type (higher fraud association)"); score += 1
+    if amount > 500 and p_email and "anonymous" in p_email:
+        flags.append("High amount + anonymous email (combined risk signal)"); score += 2
+    return {
+        "pattern_flags": flags, "patterns_detected": len(flags),
+        "risk_score": min(score, 5),
+        "risk_tier": "HIGH" if score >= 4 else "MEDIUM" if score >= 2 else "LOW",
+    }
+
+
+def get_all_external_signals(amount, transaction_dt=86400, country_code=87,
+                              product_cd=None, p_email=None, r_email=None, card_type=None) -> dict:
+    fx      = get_exchange_rate_risk(amount, country_code)
+    geo     = get_geolocation_risk(country_code)
+    time    = get_time_risk(transaction_dt)
+    pattern = get_fraud_pattern_indicators(amount, product_cd, p_email, r_email, card_type)
+    total   = fx["risk_score"] + geo["risk_score"] + time["risk_score"] + pattern["risk_score"]
+    return {
+        "exchange_rate": fx, "geolocation": geo, "time_risk": time,
+        "fraud_patterns": pattern, "total_risk_score": total,
+        "normalized_score": round((total / 18) * 100, 1),
+        "overall_tier": "HIGH" if total >= 7 else "MEDIUM" if total >= 3 else "LOW",
+    }
+
+
 # ── Helpers ────────────────────────────────────────────────────
 def risk_badge(level: str) -> str:
     cls = {"HIGH": "risk-high", "MEDIUM": "risk-medium", "LOW": "risk-low"}.get(level, "risk-low")
     return f'<span class="{cls}">{level} RISK</span>'
+
+
+def render_external_signals(signals: dict):
+    st.markdown('<div class="section-header">🌐 External Risk Signals</div>', unsafe_allow_html=True)
+    e1, e2, e3, e4 = st.columns(4)
+    fx  = signals["exchange_rate"]
+    geo = signals["geolocation"]
+    tm  = signals["time_risk"]
+    pat = signals["fraud_patterns"]
+    tier_color = {"HIGH": "#da3633", "MEDIUM": "#d29922", "LOW": "#238636"}
+
+    with e1:
+        st.metric("💱 FX Risk", fx["currency"],
+                  delta="HIGH RISK" if fx["high_risk_currency"] else "Normal",
+                  delta_color="inverse" if fx["high_risk_currency"] else "off")
+        st.caption(f"Rate: {fx['exchange_rate']} | ~${fx['usd_equivalent']:,.2f} USD")
+    with e2:
+        st.metric("🌍 Geo Risk", geo["risk_tier"],
+                  delta="VPN/Proxy ⚠️" if geo["vpn_proxy_detected"] else "Clean",
+                  delta_color="inverse" if geo["vpn_proxy_detected"] else "off")
+        st.caption(f"Sanctioned country: {'Yes ⚠️' if geo['is_sanctioned_country'] else 'No'}")
+    with e3:
+        st.metric("🕐 Time Risk", tm["risk_tier"],
+                  delta=f"{tm['hour_utc']}:00 UTC",
+                  delta_color="inverse" if tm["is_odd_hours"] else "off")
+        st.caption(f"{'Off-hours' if tm['is_odd_hours'] else 'Normal hours'} · {'Weekend' if tm['is_weekend'] else 'Weekday'}")
+    with e4:
+        st.metric("🚩 Pattern Flags", f"{pat['patterns_detected']} detected",
+                  delta=pat["risk_tier"],
+                  delta_color="inverse" if pat["risk_tier"] != "LOW" else "off")
+        st.caption(f"Pattern risk score: {pat['risk_score']}/5")
+
+    all_flags = tm["risk_flags"] + pat["pattern_flags"]
+    if all_flags:
+        with st.expander("📋 View All Risk Flag Details"):
+            for flag in all_flags:
+                st.markdown(f'<div class="fraud-pill">⚠️ {flag}</div>', unsafe_allow_html=True)
+
+    overall_color = tier_color.get(signals["overall_tier"], "#238636")
+    st.markdown(
+        f'<div class="txn-card" style="border-left:4px solid {overall_color}; margin-top:12px">'
+        f'<b>🌐 External Signal Score: {signals["normalized_score"]}/100</b> &nbsp;|&nbsp; '
+        f'Overall External Risk: <b style="color:{overall_color}">{signals["overall_tier"]}</b>'
+        f'</div>',
+        unsafe_allow_html=True
+    )
 
 
 def gauge_chart(prob: float):
@@ -106,18 +280,13 @@ def gauge_chart(prob: float):
         gauge={
             "axis": {"range": [0, 100], "tickcolor": "#8b949e"},
             "bar":  {"color": color, "thickness": 0.8},
-            "bgcolor": "#21262d",
-            "bordercolor": "#30363d",
+            "bgcolor": "#21262d", "bordercolor": "#30363d",
             "steps": [
                 {"range": [0,  40], "color": "rgba(35,134,54,0.08)"},
                 {"range": [40, 70], "color": "rgba(210,153,34,0.08)"},
                 {"range": [70,100], "color": "rgba(218,54,51,0.08)"},
             ],
-            "threshold": {
-                "line": {"color": color, "width": 4},
-                "thickness": 0.85,
-                "value": prob * 100,
-            },
+            "threshold": {"line": {"color": color, "width": 4}, "thickness": 0.85, "value": prob * 100},
         },
         title={"text": "Fraud Probability", "font": {"size": 14, "color": "#8b949e"}},
         domain={"x": [0, 1], "y": [0, 1]},
@@ -171,17 +340,11 @@ def similar_cases_section(similar_cases: list):
     with sc1:
         st.markdown("**🚨 Matched Fraud Patterns**")
         for c in fraud_cases[:3]:
-            st.markdown(
-                f'<div class="fraud-pill">🔴 ${c["amount"]:.2f} — {c["summary"][:110]}...</div>',
-                unsafe_allow_html=True
-            )
+            st.markdown(f'<div class="fraud-pill">🔴 ${c["amount"]:.2f} — {c["summary"][:110]}...</div>', unsafe_allow_html=True)
     with sc2:
         st.markdown("**✅ Matched Legit Patterns**")
         for c in legit_cases[:2]:
-            st.markdown(
-                f'<div class="legit-pill">🟢 ${c["amount"]:.2f} — {c["summary"][:110]}...</div>',
-                unsafe_allow_html=True
-            )
+            st.markdown(f'<div class="legit-pill">🟢 ${c["amount"]:.2f} — {c["summary"][:110]}...</div>', unsafe_allow_html=True)
 
 
 def llm_section(result: dict):
@@ -232,9 +395,10 @@ with st.sidebar:
     st.divider()
 
     st.markdown("**Model Settings**")
-    use_llm   = st.toggle("Enable LLM Explanation", value=True)
-    use_rag   = st.toggle("Enable RAG Context",     value=True)
-    k_similar = st.slider("Similar cases (K)", 3, 10, 5)
+    use_llm      = st.toggle("Enable LLM Explanation",      value=True)
+    use_rag      = st.toggle("Enable RAG Context",          value=True)
+    use_external = st.toggle("Enable External Risk Signals", value=True)
+    k_similar    = st.slider("Similar cases (K)", 3, 10, 5)
 
     st.divider()
     if os.getenv("GROQ_API_KEY", ""):
@@ -313,8 +477,17 @@ if page == "🔍 Analyze Transaction":
                 m1.metric("Fraud Prob", f"{result['fraud_probability']*100:.1f}%")
                 m2.metric("Prediction", "🚨 FRAUD" if result["prediction"] else "✅ LEGIT")
                 m3.metric("Risk",       result["risk_level"])
+
             if use_rag: similar_cases_section(result["similar_cases"])
             if use_llm: llm_section(result)
+
+            if use_external:
+                with st.spinner("🌐 Fetching external risk signals..."):
+                    signals = get_all_external_signals(
+                        amount=txn_amt, transaction_dt=txn_dt, country_code=addr2,
+                        product_cd=product_cd, p_email=p_email, r_email=r_email, card_type=card6,
+                    )
+                render_external_signals(signals)
 
     else:
         st.markdown("# 💳 Credit Card Fraud Analysis")
@@ -387,8 +560,16 @@ if page == "🔍 Analyze Transaction":
                 m3.metric("Risk",       result["risk_level"])
                 if result.get("llm_source") == "lora":
                     st.markdown('<div class="lora-badge">⚡ LoRA/PEFT adapter active</div>', unsafe_allow_html=True)
+
             if use_rag: similar_cases_section(result["similar_cases"])
             if use_llm: llm_section(result)
+
+            if use_external:
+                with st.spinner("🌐 Fetching external risk signals..."):
+                    signals = get_all_external_signals(
+                        amount=amount, transaction_dt=time_sec, country_code=87,
+                    )
+                render_external_signals(signals)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -477,7 +658,6 @@ elif page == "📊 Model Dashboard":
         st.warning("⚠️ No metrics found. Train models first.")
         st.stop()
 
-    # Side-by-side comparison if both exist
     if ieee_metrics and cc_metrics:
         st.markdown("### 📊 Model Comparison")
         col_a, col_b = st.columns(2)
@@ -496,7 +676,6 @@ elif page == "📊 Model Dashboard":
             if cc_metrics.get("recall_at_100"):
                 st.metric("Recall@100", f"{cc_metrics['recall_at_100']*100:.1f}%")
 
-        # Comparison bar
         fig_cmp = go.Figure()
         metrics_list = ["precision","recall","f1_score","roc_auc"]
         labels       = ["Precision","Recall","F1","ROC-AUC"]
@@ -560,10 +739,7 @@ Place all files in `data/`
 
 ### 4. Train Models
 ```bash
-# IEEE-CIS
 python train_model.py data/train_transaction.csv data/train_identity.csv
-
-# Credit Card (add --skip-lora to skip fine-tuning, uses Groq instead)
 python train_creditcard.py data/creditcard.csv
 python train_creditcard.py data/creditcard.csv --skip-lora
 ```
@@ -588,5 +764,6 @@ streamlit run app.py
 | ML Model | XGBoost | XGBoost |
 | LLM | Groq Llama 3.3 | LoRA adapter → Groq fallback |
 | RAG | FAISS (transaction summaries) | FAISS (PCA summaries) |
+| External Signals | FX Risk · Geo Risk · Time Risk · Fraud Patterns | Same |
 | Special metrics | Precision/Recall/F1/AUC | + Recall@K |
     """)

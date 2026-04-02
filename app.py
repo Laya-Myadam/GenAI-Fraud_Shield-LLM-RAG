@@ -389,7 +389,7 @@ with st.sidebar:
     st.divider()
     page = st.radio(
         "Navigation",
-        ["🔍 Analyze Transaction", "📁 Batch Analysis", "📊 Model Dashboard", "⚙️ Setup Guide"],
+        ["🔍 Analyze Transaction", "📁 Batch Analysis", "⚙️ Setup Guide"],
         label_visibility="collapsed",
     )
     st.divider()
